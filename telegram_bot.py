@@ -22,6 +22,7 @@ from pykrx import stock
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
+from aiohttp import web
 
 # ─── 환경변수에서 읽어옴 (Railway Variables에서 설정) ───
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN",   "")
@@ -317,6 +318,11 @@ def main():
         print("❌ TELEGRAM_TOKEN 환경변수가 없습니다."); sys.exit(1)
     if not TELEGRAM_CHAT_ID:
         print("❌ TELEGRAM_CHAT_ID 환경변수가 없습니다."); sys.exit(1)
+
+    # Railway가 제공하는 PUBLIC URL (환경변수로 설정 필요)
+    # 예: https://buying56-bot.up.railway.app
+    webhook_url = os.getenv("WEBHOOK_URL", "").rstrip("/")
+
     log.info("봇 시작")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start",  cmd_start))
@@ -328,7 +334,22 @@ def main():
         time=datetime.strptime("16:10", "%H:%M").time(),
         name="daily_scan",
     )
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    if webhook_url:
+        # ── 웹훅 모드 (Railway 배포용) ──────────────────
+        port = int(os.getenv("PORT", "8080"))
+        log.info(f"웹훅 모드: {webhook_url}  포트: {port}")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            webhook_url=f"{webhook_url}/webhook",
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+        )
+    else:
+        # ── 폴링 모드 (로컬 개발용) ─────────────────────
+        log.info("폴링 모드 (로컬)")
+        app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
