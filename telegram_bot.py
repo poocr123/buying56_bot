@@ -16,9 +16,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ParseMode
 
-# ─── 여기에 값을 입력하세요 ──────────────────────────
-TELEGRAM_TOKEN   = "8663852444:AAEPqU1rNuF9YtPfikmC6__zJu2M-7WKP98"   # @BotFather에서 발급
-TELEGRAM_CHAT_ID = "5670312380"   # 본인 채팅 ID
+# ─── 환경변수에서 읽어옴 (Railway Variables에서 설정) ───
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN",   "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # ────────────────────────────────────────────────────
 
 # 스크리너 임포트
