@@ -182,13 +182,20 @@ def build_message(results, trade_date):
         return f"📊 *{ds} 스크리닝 결과*\n\n🔍 조건에 맞는 종목이 없습니다\\."
     lines = [f"📊 *{ds} 스크리닝 결과*", f"✅ *{len(results)}개 종목* 발견\\!\n"]
     for i, r in enumerate(results, 1):
-        mkt  = "🔵" if r["market"]=="KOSPI" else "🟣"
-        fire = "🔥🔥" if r["vol_ratio"]>=1000 else "🔥" if r["vol_ratio"]>=700 else "📈"
+        mkt     = "🔵" if r["market"] == "KOSPI" else "🟣"
+        fire    = "🔥🔥" if r["vol_ratio"] >= 1000 else "🔥" if r["vol_ratio"] >= 700 else "📈"
+        name    = escape_md(r["name"])
+        ticker  = escape_md(r["ticker"])
+        price   = escape_md(fmt_price(r["close"]))
+        vol_str = escape_md("{:,.0f}%".format(r["vol_ratio"]))
+        ma5     = escape_md(fmt_price(r["ma5"]))
+        ma20    = escape_md(fmt_price(r["ma20"]))
+        cap     = escape_md(fmt_won(r["market_cap"]))
         lines.append(
-            f"{i}\\. {mkt} *{escape_md(r['name'])}* `{escape_md(r['ticker'])}`\n"
-            f"   💰 {escape_md(fmt_price(r['close']))}  {fire} `{escape_md(f\"{r['vol_ratio']:,.0f}%\")}`\n"
-            f"   MA5 `{escape_md(fmt_price(r['ma5']))}` \\| MA20 `{escape_md(fmt_price(r['ma20']))}`\n"
-            f"   🏦 {escape_md(fmt_won(r['market_cap']))}"
+            f"{i}\\. {mkt} *{name}* `{ticker}`\n"
+            f"   💰 {price}  {fire} `{vol_str}`\n"
+            f"   MA5 `{ma5}` \\| MA20 `{ma20}`\n"
+            f"   🏦 {cap}"
         )
     return "\n".join(lines)
 
