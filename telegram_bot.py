@@ -22,7 +22,6 @@ from pykrx import stock
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
-from aiohttp import web
 
 # ─── 환경변수에서 읽어옴 (Railway Variables에서 설정) ───
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN",   "")
@@ -311,6 +310,29 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
     await run_screening(context, TELEGRAM_CHAT_ID, silent=True)
 
 # ══════════════════════════════════════════════
+#  헬스체크 서버 (Railway 포트 응답용)
+# ══════════════════════════════════════════════
+async def health_server():
+    """Railway 헬스체크용 HTTP 서버 (포트만 열어둠)"""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        def log_message(self, *args):
+            pass  # 헬스체크 로그 숨김
+
+    port = int(os.getenv("PORT", "8080"))
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    log.info(f"헬스체크 서버 시작 (포트 {port})")
+
+
+# ══════════════════════════════════════════════
 #  메인
 # ══════════════════════════════════════════════
 def main():
@@ -319,37 +341,43 @@ def main():
     if not TELEGRAM_CHAT_ID:
         print("❌ TELEGRAM_CHAT_ID 환경변수가 없습니다."); sys.exit(1)
 
-    # Railway가 제공하는 PUBLIC URL (환경변수로 설정 필요)
-    # 예: https://buying56-bot.up.railway.app
-    webhook_url = os.getenv("WEBHOOK_URL", "").rstrip("/")
+    async def run():
+        await health_server()   # 헬스체크 HTTP 서버 먼저 띄움
 
-    log.info("봇 시작")
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start",  cmd_start))
-    app.add_handler(CommandHandler("scan",   cmd_scan))
-    app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("help",   cmd_help))
-    app.job_queue.run_daily(
-        scheduled_scan,
-        time=datetime.strptime("16:10", "%H:%M").time(),
-        name="daily_scan",
-    )
-
-    if webhook_url:
-        # ── 웹훅 모드 (Railway 배포용) ──────────────────
-        port = int(os.getenv("PORT", "8080"))
-        log.info(f"웹훅 모드: {webhook_url}  포트: {port}")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            webhook_url=f"{webhook_url}/webhook",
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
+        app = Application.builder().token(TELEGRAM_TOKEN).build()
+        app.add_handler(CommandHandler("start",  cmd_start))
+        app.add_handler(CommandHandler("scan",   cmd_scan))
+        app.add_handler(CommandHandler("status", cmd_status))
+        app.add_handler(CommandHandler("help",   cmd_help))
+        app.job_queue.run_daily(
+            scheduled_scan,
+            time=datetime.strptime("16:10", "%H:%M").time(),
+            name="daily_scan",
         )
-    else:
-        # ── 폴링 모드 (로컬 개발용) ─────────────────────
-        log.info("폴링 모드 (로컬)")
-        app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+
+        log.info("봇 시작 (폴링 모드)")
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+        )
+        log.info("폴링 시작 완료")
+
+        # 종료 시그널 대기
+        import signal
+        stop_event = asyncio.Event()
+        loop = asyncio.get_event_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop_event.set)
+        await stop_event.wait()
+
+        log.info("종료 중...")
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+
+    asyncio.run(run())
 
 if __name__ == "__main__":
     main()
