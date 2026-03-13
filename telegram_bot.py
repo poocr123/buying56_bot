@@ -13,6 +13,9 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+KST = ZoneInfo("Asia/Seoul")
 
 import pandas as pd
 from pykrx import stock
@@ -65,24 +68,32 @@ def escape_md(text):
 #  거래일
 # ══════════════════════════════════════════════
 def get_last_trading_day():
+    """KST 기준 최근 거래일 반환"""
+    now_kst = datetime.now(KST)
+    errors = []
     for i in range(10):
-        d = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
+        d = (now_kst - timedelta(days=i)).strftime("%Y%m%d")
         try:
-            if stock.get_market_ticker_list(d, market="KOSPI"):
+            tickers = stock.get_market_ticker_list(d, market="KOSPI")
+            if tickers:
+                log.info(f"최근 거래일: {d}")
                 return d
-        except Exception:
-            pass
-    raise RuntimeError("최근 거래일을 찾을 수 없습니다.")
+        except Exception as e:
+            errors.append(f"{d}: {e}")
+            log.warning(f"거래일 조회 실패 {d}: {e}")
+    raise RuntimeError("최근 거래일을 찾을 수 없습니다.\n" + "\n".join(errors))
 
 def get_prev_trading_day(date_str):
+    """KST 기준 이전 거래일 반환"""
     date = datetime.strptime(date_str, "%Y%m%d")
     for i in range(1, 10):
         d = (date - timedelta(days=i)).strftime("%Y%m%d")
         try:
-            if stock.get_market_ticker_list(d, market="KOSPI"):
+            tickers = stock.get_market_ticker_list(d, market="KOSPI")
+            if tickers:
                 return d
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"이전 거래일 조회 실패 {d}: {e}")
     raise RuntimeError("이전 거래일을 찾을 수 없습니다.")
 
 # ══════════════════════════════════════════════
@@ -213,10 +224,16 @@ def build_buttons(results):
 #  스크리닝 실행 (비동기)
 # ══════════════════════════════════════════════
 async def run_screening(context, chat_id, silent=False):
+    now_kst = datetime.now(KST)
     if not silent:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="🔍 *스크리닝 시작\\.\\.\\.*\n\nKOSPI \\+ KOSDAQ 전종목 분석 중\\.\n\\(약 10\\~30분 소요\\)",
+            text=(
+                "🔍 *스크리닝 시작\\.\\.\\.*\n\n"
+                f"KST 현재 시각: `{escape_md(now_kst.strftime('%Y\\-%m\\-%d %H:%M'))}`\n"
+                "KOSPI \\+ KOSDAQ 전종목 분석 중\\.\n"
+                "\\(약 10\\~30분 소요\\)"
+            ),
             parse_mode=ParseMode.MARKDOWN_V2,
         )
     try:
@@ -230,9 +247,10 @@ async def run_screening(context, chat_id, silent=False):
         )
     except Exception as e:
         log.error(f"오류: {e}", exc_info=True)
+        err_detail = escape_md(str(e)[:800])   # 너무 길면 자름
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"❌ 오류 발생\n`{escape_md(str(e))}`",
+            text=f"❌ *오류 발생*\n\n`{err_detail}`",
             parse_mode=ParseMode.MARKDOWN_V2,
         )
 
@@ -257,7 +275,7 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await run_screening(context, str(update.effective_chat.id))
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now()
+    now = datetime.now(KST)
     wd  = ["월","화","수","목","금","토","일"][now.weekday()]
     nr  = now.replace(hour=16, minute=10, second=0, microsecond=0)
     if now >= nr or now.weekday() >= 5:
@@ -286,7 +304,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
-    if datetime.now().weekday() >= 5:
+    if datetime.now(KST).weekday() >= 5:
         return
     log.info("자동 스캔 시작")
     await run_screening(context, TELEGRAM_CHAT_ID, silent=True)
