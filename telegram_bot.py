@@ -17,8 +17,8 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from telegram.constants import ParseMode
 
 # ─── 여기에 값을 입력하세요 ──────────────────────────
-TELEGRAM_TOKEN   = "여기에_봇_토큰_입력"   # @BotFather에서 발급
-TELEGRAM_CHAT_ID = "여기에_채팅_ID_입력"   # 본인 채팅 ID
+TELEGRAM_TOKEN   = "8663852444:AAEPqU1rNuF9YtPfikmC6__zJu2M-7WKP98"   # @BotFather에서 발급
+TELEGRAM_CHAT_ID = "5670312380"   # 본인 채팅 ID
 # ────────────────────────────────────────────────────
 
 # 스크리너 임포트
