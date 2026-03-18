@@ -371,10 +371,12 @@ def screen_stocks() -> tuple[list[dict], str, int]:
             try:
                 close      = float(q.get("regularMarketPrice", 0) or 0)
                 volume     = int(q.get("regularMarketVolume", 0) or 0)
-                prev_vol   = int(q.get("regularMarketPreviousClose", 0) or 0)
-                # prev_vol 없으면 averageDailyVolume10Day 사용
+                # 전일 거래량: Yahoo quote에 직접 제공 안 됨
+                # → averageDailyVolume10Day (10일 평균) 를 기준으로 상대거래량 계산
+                # → 더 나은 신호: 평소 대비 얼마나 터졌는지
+                prev_vol = int(q.get("averageDailyVolume10Day", 0) or 0)
                 if prev_vol <= 0:
-                    prev_vol = int(q.get("averageDailyVolume10Day", 0) or 0)
+                    prev_vol = int(q.get("averageDailyVolume3Month", 0) or 0)
                 market_cap = float(q.get("marketCap", 0) or 0)
                 name       = q.get("longName") or q.get("shortName") or sym
 
