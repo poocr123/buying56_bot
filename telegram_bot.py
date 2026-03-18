@@ -524,24 +524,6 @@ async def run_screening(context, chat_id, silent=False):
 # ══════════════════════════════════════════════
 #  /test
 # ══════════════════════════════════════════════
-async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔬 테스트 중\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    lines = [f"*테스트 결과*\n내장 종목: `{len(ALL_TICKERS)}`개\n"]
-
-    # 배치 quote 테스트
-    try:
-        q = yahoo_batch_quote(["005930.KS", "000660.KS", "247540.KQ"])
-        for sym, data in q.items():
-            code  = sym.replace(".KS","").replace(".KQ","")
-            price = data.get("regularMarketPrice", "?")
-            vol   = data.get("regularMarketVolume", "?")
-            lines.append(f"✅ `{code}`: `{fmt_price(float(price))}` 거래량 `{vol:,}`")
-    except Exception as e:
-        lines.append(f"❌ 배치 quote: `{escape_md(str(e)[:80])}`")
-
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN_V2)
-
-
 # ══════════════════════════════════════════════
 #  커맨드 핸들러
 # ══════════════════════════════════════════════
@@ -554,6 +536,40 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📌 내 채팅 ID: `{escape_md(chat_id)}`",
         parse_mode=ParseMode.MARKDOWN_V2,
     )
+
+async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔬 테스트 중\.\.\.\.", parse_mode=ParseMode.MARKDOWN_V2)
+    lines = [f"*테스트 결과*\n내장 종목: `{len(ALL_TICKERS)}`개\n"]
+
+    # 배치 quote 상세 확인
+    test_syms = ["005930.KS", "000660.KS", "247540.KQ", "086520.KQ", "042700.KQ"]
+    try:
+        quotes = yahoo_batch_quote(test_syms)
+        for sym, q in quotes.items():
+            code     = sym.replace(".KS","").replace(".KQ","")
+            price    = float(q.get("regularMarketPrice", 0) or 0)
+            vol      = int(q.get("regularMarketVolume", 0) or 0)
+            avg10    = int(q.get("averageDailyVolume10Day", 0) or 0)
+            avg3m    = int(q.get("averageDailyVolume3Month", 0) or 0)
+            mktcap   = float(q.get("marketCap", 0) or 0)
+            vol_r    = vol / avg10 * 100 if avg10 > 0 else 0
+
+            cap_str  = fmt_won(mktcap) if mktcap else "?"
+            verdict = "✅통과" if vol_r >= CONFIG["min_vol_ratio"] else "❌미달"
+            line = (
+                f"📌 *{escape_md(code)}*\n"
+                f"   가격: `{escape_md(fmt_price(price))}` 시총: `{escape_md(cap_str)}`\n"
+                f"   오늘거래량: `{escape_md('{:,}'.format(vol))}`\n"
+                f"   10일평균: `{escape_md('{:,}'.format(avg10))}` "
+                f"3개월평균: `{escape_md('{:,}'.format(avg3m))}`\n"
+                f"   📊 거래량비율: `{escape_md("{:.0f}%".format(vol_r))}` \\({escape_md(verdict)}\\)"
+            )
+            lines.append(line)
+    except Exception as e:
+        lines.append(f"❌ 배치 quote: `{escape_md(str(e)[:80])}`")
+
+    lines.append(f"\n기준: 거래량비율 `{CONFIG['min_vol_ratio']}%` 이상")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN_V2)
 
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await run_screening(context, str(update.effective_chat.id))
