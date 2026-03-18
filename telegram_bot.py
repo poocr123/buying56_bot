@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-📱 주식 알림봇 – Yahoo Finance v8 Chart API 기반
-종목 리스트: 내장 (KOSPI/KOSDAQ 주요 500종목)
-데이터: Yahoo Finance v8 (해외서버 접근 가능 확인됨)
+📱 주식 알림봇 – 전종목 스캔
+종목 리스트: GitHub FinanceData/marcap (매일 업데이트 전체 KRX)
+데이터:      Yahoo Finance v8 Chart API
 """
 
-import asyncio, logging, os, sys, time, threading
+import asyncio, logging, os, sys, time, threading, csv, io
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from zoneinfo import ZoneInfo
@@ -24,8 +24,8 @@ log = logging.getLogger(__name__)
 
 CONFIG = {
     "min_price":      1_000,
-    "min_market_cap": 50_000_000_000,
-    "min_vol_ratio":  500,
+    "min_market_cap": 50_000_000_000,   # 500억
+    "min_vol_ratio":  500,               # 전일 대비 500%
     "ma_short":       5,
     "ma_long":        20,
 }
@@ -35,93 +35,88 @@ HEADERS = {
     "Accept":     "application/json, text/plain, */*",
 }
 
+
 # ══════════════════════════════════════════════
-#  내장 종목 리스트 (KOSPI .KS / KOSDAQ .KQ)
-#  시가총액 500억 이상 주요 종목
+#  전종목 리스트 — GitHub FinanceData/marcap
+#  https://github.com/FinanceData/marcap
+#  컬럼: Date,Code,Name,Market,Shares,MarketCap,...
 # ══════════════════════════════════════════════
-KR_TICKERS = [
-    # ── KOSPI 대형주 ──────────────────────────
+def fetch_all_tickers() -> list[tuple[str, str, str]]:
+    """최근 거래일 CSV에서 전종목 (code, name, market) 반환"""
+    now_kst = datetime.now(KST)
+    tried = []
+
+    for i in range(10):
+        d = now_kst - timedelta(days=i)
+        if d.weekday() >= 5:        # 주말 건너뜀
+            continue
+        date_str = d.strftime("%Y-%m-%d")
+        url = (
+            f"https://raw.githubusercontent.com/FinanceData/marcap"
+            f"/master/data/{date_str}.csv"
+        )
+        tried.append(date_str)
+        try:
+            r = requests.get(url, timeout=20)
+            if r.status_code != 200:
+                log.debug(f"marcap {date_str}: HTTP {r.status_code}")
+                continue
+
+            reader = csv.DictReader(io.StringIO(r.text))
+            tickers = []
+            for row in reader:
+                code   = row.get("Code", "").strip()
+                name   = row.get("Name", "").strip()
+                market = row.get("Market", "KOSPI").strip()
+                if not code or len(code) != 6:
+                    continue
+                # Yahoo Finance 심볼 변환
+                suffix = ".KS" if market == "KOSPI" else ".KQ"
+                tickers.append((code + suffix, name, market))
+
+            if tickers:
+                log.info(f"marcap {date_str}: {len(tickers)}개 종목 로드")
+                return tickers
+
+        except Exception as e:
+            log.warning(f"marcap {date_str} 실패: {e}")
+
+    log.warning(f"GitHub CSV 실패 (시도: {tried}), 내장 리스트 사용")
+    return FALLBACK_TICKERS
+
+
+# ── 폴백 리스트 (GitHub 접근 실패 시) ──────────
+FALLBACK_TICKERS = [
     ("005930.KS","삼성전자","KOSPI"),    ("000660.KS","SK하이닉스","KOSPI"),
     ("373220.KS","LG에너지솔루션","KOSPI"), ("207940.KS","삼성바이오로직스","KOSPI"),
     ("005380.KS","현대차","KOSPI"),       ("000270.KS","기아","KOSPI"),
     ("068270.KS","셀트리온","KOSPI"),     ("105560.KS","KB금융","KOSPI"),
-    ("055550.KS","신한지주","KOSPI"),     ("012330.KS","현대모비스","KOSPI"),
-    ("035420.KS","NAVER","KOSPI"),        ("051910.KS","LG화학","KOSPI"),
-    ("035720.KS","카카오","KOSPI"),       ("003550.KS","LG","KOSPI"),
-    ("032830.KS","삼성생명","KOSPI"),     ("086790.KS","하나금융지주","KOSPI"),
-    ("028260.KS","삼성물산","KOSPI"),     ("066570.KS","LG전자","KOSPI"),
-    ("017670.KS","SK텔레콤","KOSPI"),     ("009150.KS","삼성전기","KOSPI"),
-    ("034730.KS","SK","KOSPI"),           ("018260.KS","삼성SDS","KOSPI"),
-    ("011200.KS","HMM","KOSPI"),          ("096770.KS","SK이노베이션","KOSPI"),
+    ("055550.KS","신한지주","KOSPI"),     ("035420.KS","NAVER","KOSPI"),
+    ("051910.KS","LG화학","KOSPI"),       ("035720.KS","카카오","KOSPI"),
+    ("006400.KS","삼성SDI","KOSPI"),      ("005490.KS","POSCO홀딩스","KOSPI"),
+    ("012330.KS","현대모비스","KOSPI"),   ("066570.KS","LG전자","KOSPI"),
+    ("003550.KS","LG","KOSPI"),           ("086790.KS","하나금융지주","KOSPI"),
+    ("028260.KS","삼성물산","KOSPI"),     ("017670.KS","SK텔레콤","KOSPI"),
+    ("034730.KS","SK","KOSPI"),           ("096770.KS","SK이노베이션","KOSPI"),
     ("030200.KS","KT","KOSPI"),           ("316140.KS","우리금융지주","KOSPI"),
     ("003490.KS","대한항공","KOSPI"),     ("010950.KS","S-Oil","KOSPI"),
-    ("047050.KS","포스코인터내셔널","KOSPI"), ("000810.KS","삼성화재","KOSPI"),
-    ("139480.KS","이마트","KOSPI"),       ("361610.KS","SK아이이테크놀로지","KOSPI"),
-    ("097950.KS","CJ제일제당","KOSPI"),   ("024110.KS","기업은행","KOSPI"),
-    ("010130.KS","고려아연","KOSPI"),     ("271560.KS","오리온","KOSPI"),
-    ("004020.KS","현대제철","KOSPI"),     ("033780.KS","KT&G","KOSPI"),
-    ("009830.KS","한화솔루션","KOSPI"),   ("042660.KS","한화오션","KOSPI"),
-    ("007070.KS","GS리테일","KOSPI"),     ("011070.KS","LG이노텍","KOSPI"),
-    ("003670.KS","포스코퓨처엠","KOSPI"), ("000120.KS","CJ대한통운","KOSPI"),
-    ("021240.KS","코웨이","KOSPI"),       ("329180.KS","HD현대중공업","KOSPI"),
-    ("010140.KS","삼성중공업","KOSPI"),   ("047810.KS","한국항공우주","KOSPI"),
-    ("161390.KS","한국타이어앤테크놀로지","KOSPI"), ("002790.KS","아모레퍼시픽그룹","KOSPI"),
-    ("006800.KS","미래에셋증권","KOSPI"), ("000100.KS","유한양행","KOSPI"),
-    ("036570.KS","엔씨소프트","KOSPI"),   ("251270.KS","넷마블","KOSPI"),
-    ("180640.KS","한진칼","KOSPI"),       ("267250.KS","HD현대","KOSPI"),
-    ("086280.KS","현대글로비스","KOSPI"), ("078930.KS","GS","KOSPI"),
-    ("005490.KS","POSCO홀딩스","KOSPI"),  ("000720.KS","현대건설","KOSPI"),
-    ("002380.KS","KCC","KOSPI"),          ("008770.KS","호텔신라","KOSPI"),
-    ("009240.KS","한샘","KOSPI"),         ("018880.KS","한온시스템","KOSPI"),
-    ("006360.KS","GS건설","KOSPI"),       ("090430.KS","아모레퍼시픽","KOSPI"),
-    ("016360.KS","삼성증권","KOSPI"),     ("034020.KS","두산에너빌리티","KOSPI"),
-    ("015760.KS","한국전력","KOSPI"),     ("036460.KS","한국가스공사","KOSPI"),
-    ("071050.KS","한국금융지주","KOSPI"), ("032640.KS","LG유플러스","KOSPI"),
-    ("011790.KS","SKC","KOSPI"),          ("004990.KS","롯데지주","KOSPI"),
-    ("023530.KS","롯데쇼핑","KOSPI"),     ("011780.KS","금호석유","KOSPI"),
-    ("000150.KS","두산","KOSPI"),         ("005830.KS","DB손해보험","KOSPI"),
-    ("020150.KS","롯데에너지머티리얼즈","KOSPI"), ("019170.KS","신풍제약","KOSPI"),
-    ("003230.KS","삼양식품","KOSPI"),     ("005300.KS","롯데칠성","KOSPI"),
-    ("007310.KS","오뚜기","KOSPI"),       ("000080.KS","하이트진로","KOSPI"),
-    ("302440.KS","SK바이오사이언스","KOSPI"), ("241560.KS","두산밥캣","KOSPI"),
-    ("003410.KS","쌍용C&E","KOSPI"),      ("014680.KS","한화생명","KOSPI"),
-    ("326030.KS","SK바이오팜","KOSPI"),   ("175330.KS","JB금융지주","KOSPI"),
-    ("138040.KS","메리츠금융지주","KOSPI"), ("100840.KS","SNT모티브","KOSPI"),
-    ("010620.KS","HD현대미포","KOSPI"),   ("012450.KS","한화에어로스페이스","KOSPI"),
-    ("000990.KS","DB하이텍","KOSPI"),     ("009420.KS","한올바이오파마","KOSPI"),
-    ("006400.KS","삼성SDI","KOSPI"),      ("028050.KS","삼성엔지니어링","KOSPI"),
-    # ── KOSDAQ 주요주 ─────────────────────────
+    ("000810.KS","삼성화재","KOSPI"),     ("009150.KS","삼성전기","KOSPI"),
+    ("018260.KS","삼성SDS","KOSPI"),      ("011200.KS","HMM","KOSPI"),
+    ("015760.KS","한국전력","KOSPI"),     ("012450.KS","한화에어로스페이스","KOSPI"),
+    ("329180.KS","HD현대중공업","KOSPI"), ("010140.KS","삼성중공업","KOSPI"),
+    ("034020.KS","두산에너빌리티","KOSPI"), ("042660.KS","한화오션","KOSPI"),
+    ("138040.KS","메리츠금융지주","KOSPI"), ("267250.KS","HD현대","KOSPI"),
     ("247540.KQ","에코프로비엠","KOSDAQ"), ("086520.KQ","에코프로","KOSDAQ"),
     ("091990.KQ","셀트리온헬스케어","KOSDAQ"), ("196170.KQ","알테오젠","KOSDAQ"),
     ("041510.KQ","에스엠","KOSDAQ"),       ("263750.KQ","펄어비스","KOSDAQ"),
-    ("293490.KQ","카카오게임즈","KOSDAQ"), ("112040.KQ","위메이드","KOSDAQ"),
-    ("357780.KQ","솔브레인","KOSDAQ"),     ("039030.KQ","이오테크닉스","KOSDAQ"),
-    ("145020.KQ","휴젤","KOSDAQ"),         ("214150.KQ","클래시스","KOSDAQ"),
-    ("036030.KQ","다원시스","KOSDAQ"),     ("066970.KQ","엘앤에프","KOSDAQ"),
-    ("095340.KQ","ISC","KOSDAQ"),          ("017800.KQ","현인텔리전스","KOSDAQ"),
-    ("035900.KQ","JYP Ent.","KOSDAQ"),     ("122870.KQ","와이지엔터테인먼트","KOSDAQ"),
-    ("041960.KQ","블리자드","KOSDAQ"),     ("054040.KQ","한국팩키지","KOSDAQ"),
-    ("240810.KQ","원익IPS","KOSDAQ"),      ("131970.KQ","두산테스나","KOSDAQ"),
-    ("950130.KQ","엑세스바이오","KOSDAQ"), ("141080.KQ","레고켐바이오","KOSDAQ"),
-    ("299900.KQ","스튜디오드래곤","KOSDAQ"), ("067160.KQ","아프리카TV","KOSDAQ"),
-    ("236850.KQ","에이피알","KOSDAQ"),     ("039200.KQ","오스코텍","KOSDAQ"),
-    ("057050.KQ","현대홈쇼핑","KOSDAQ"),   ("080160.KQ","모비스","KOSDAQ"),
-    ("078600.KQ","대주전자재료","KOSDAQ"), ("058470.KQ","리노공업","KOSDAQ"),
-    ("064760.KQ","티씨케이","KOSDAQ"),     ("042700.KQ","한미반도체","KOSDAQ"),
-    ("032500.KQ","케이엠더블유","KOSDAQ"), ("036810.KQ","에프에스티","KOSDAQ"),
-    ("065350.KQ","신성델타테크","KOSDAQ"), ("089030.KQ","테크윙","KOSDAQ"),
-    ("025980.KQ","알파홀딩스","KOSDAQ"),   ("083660.KQ","CSA코스믹","KOSDAQ"),
-    ("237690.KQ","에스티팜","KOSDAQ"),     ("900140.KQ","일진하이솔루스","KOSDAQ"),
-    ("031980.KQ","피에스케이","KOSDAQ"),   ("101490.KQ","에스앤에스텍","KOSDAQ"),
-    ("211050.KQ","인카금융서비스","KOSDAQ"), ("060310.KQ","3S","KOSDAQ"),
-    ("900250.KQ","크리스탈지노믹스","KOSDAQ"), ("950160.KQ","코오롱티슈진","KOSDAQ"),
-    ("108320.KQ","LX세미콘","KOSDAQ"),     ("119850.KQ","지엔씨에너지","KOSDAQ"),
-    ("054450.KQ","텔레칩스","KOSDAQ"),     ("083450.KQ","GST","KOSDAQ"),
+    ("293490.KQ","카카오게임즈","KOSDAQ"), ("066970.KQ","엘앤에프","KOSDAQ"),
+    ("042700.KQ","한미반도체","KOSDAQ"),  ("108320.KQ","LX세미콘","KOSDAQ"),
+    ("035900.KQ","JYP Ent.","KOSDAQ"),    ("058470.KQ","리노공업","KOSDAQ"),
 ]
 
 
 # ══════════════════════════════════════════════
-#  Yahoo Finance v8 Chart API
+#  Yahoo Finance v8 Chart
 # ══════════════════════════════════════════════
 def yahoo_chart(symbol: str, days: int = 30) -> dict | None:
     url = (
@@ -130,29 +125,26 @@ def yahoo_chart(symbol: str, days: int = 30) -> dict | None:
     )
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
+        if r.status_code != 200:
+            return None
         result = r.json().get("chart", {}).get("result")
         return result[0] if result else None
-    except Exception as e:
-        log.debug(f"chart 실패 {symbol}: {e}")
+    except Exception:
         return None
 
 
 def parse_chart(chart: dict) -> dict | None:
-    """차트에서 현재가/거래량/시총/종가시리즈 추출"""
     try:
         meta   = chart.get("meta", {})
         quote  = chart.get("indicators", {}).get("quote", [{}])[0]
         closes = [c for c in (quote.get("close") or []) if c is not None]
         vols   = [v for v in (quote.get("volume") or []) if v is not None]
-
-        if len(closes) < 2:
+        if len(closes) < 2 or len(vols) < 2:
             return None
-
         return {
             "close":      meta.get("regularMarketPrice") or closes[-1],
-            "volume":     meta.get("regularMarketVolume") or (vols[-1] if vols else 0),
-            "prev_vol":   vols[-2] if len(vols) >= 2 else 0,
+            "volume":     meta.get("regularMarketVolume") or vols[-1],
+            "prev_vol":   vols[-2],
             "market_cap": meta.get("marketCap") or 0,
             "closes":     closes,
         }
@@ -163,71 +155,73 @@ def parse_chart(chart: dict) -> dict | None:
 # ══════════════════════════════════════════════
 #  스크리닝
 # ══════════════════════════════════════════════
-def screen_stocks() -> tuple[list[dict], str]:
+def screen_stocks() -> tuple[list[dict], str, int]:
     trade_date = datetime.now(KST).strftime("%Y%m%d")
-    log.info(f"스크리닝 시작 (KST: {trade_date}) / 총 {len(KR_TICKERS)}종목")
 
-    results = []
-    ma_s_n  = CONFIG["ma_short"]
-    ma_l_n  = CONFIG["ma_long"]
+    tickers = fetch_all_tickers()
+    total   = len(tickers)
+    log.info(f"스크리닝 시작: {total}개 종목 (KST {trade_date})")
 
-    for i, (symbol, name, market) in enumerate(KR_TICKERS, 1):
+    results  = []
+    ma_s_n   = CONFIG["ma_short"]
+    ma_l_n   = CONFIG["ma_long"]
+    checked  = 0
+
+    for i, (symbol, name, market) in enumerate(tickers, 1):
         try:
             chart = yahoo_chart(symbol, days=40)
-            if chart is None:
+            if not chart:
                 continue
 
             d = parse_chart(chart)
-            if d is None:
+            if not d:
                 continue
 
+            checked += 1
             close      = d["close"]
             volume     = d["volume"]
             prev_vol   = d["prev_vol"]
             market_cap = d["market_cap"]
             closes     = d["closes"]
 
-            # 필터
-            if close < CONFIG["min_price"]:         continue
+            if close < CONFIG["min_price"]:           continue
             if market_cap < CONFIG["min_market_cap"]: continue
-            if prev_vol <= 0:                       continue
+            if prev_vol <= 0:                         continue
 
             vol_ratio = volume / prev_vol * 100
-            if vol_ratio < CONFIG["min_vol_ratio"]: continue
+            if vol_ratio < CONFIG["min_vol_ratio"]:   continue
+            if len(closes) < ma_l_n:                  continue
 
-            # 이평선 정배열
-            if len(closes) < ma_l_n:
-                continue
             ma_s = sum(closes[-ma_s_n:]) / ma_s_n
             ma_l = sum(closes[-ma_l_n:]) / ma_l_n
-
             if not (close > ma_s > ma_l):
                 continue
 
             code = symbol.replace(".KS", "").replace(".KQ", "")
             results.append({
-                "ticker":    code,
-                "name":      name,
-                "market":    market,
-                "close":     close,
-                "volume":    volume,
-                "prev_vol":  prev_vol,
-                "vol_ratio": vol_ratio,
-                "market_cap":market_cap,
-                "ma5":       round(ma_s, 0),
-                "ma20":      round(ma_l, 0),
+                "ticker":     code,
+                "name":       name,
+                "market":     market,
+                "close":      close,
+                "volume":     volume,
+                "prev_vol":   prev_vol,
+                "vol_ratio":  vol_ratio,
+                "market_cap": market_cap,
+                "ma5":        round(ma_s, 0),
+                "ma20":       round(ma_l, 0),
             })
-            log.info(f"  ✅ {name}({code}) 거래량비율={vol_ratio:.0f}%")
+            log.info(f"  ✅ {name}({code}) {vol_ratio:.0f}%")
 
         except Exception as e:
             log.debug(f"오류 {symbol}: {e}")
 
-        if i % 50 == 0:
-            log.info(f"진행: {i}/{len(KR_TICKERS)}")
-        time.sleep(0.1)
+        if i % 100 == 0:
+            log.info(f"진행 {i}/{total} (유효데이터 {checked}개, 통과 {len(results)}개)")
 
-    log.info(f"스크리닝 완료 → {len(results)}개 종목")
-    return sorted(results, key=lambda x: x["vol_ratio"], reverse=True), trade_date
+        time.sleep(0.08)
+
+    log.info(f"완료: {checked}/{total} 유효 → {len(results)}개 통과")
+    return sorted(results, key=lambda x: x["vol_ratio"], reverse=True), trade_date, total
 
 
 # ══════════════════════════════════════════════
@@ -245,14 +239,21 @@ def escape_md(text):
         text = text.replace(ch, f"\\{ch}")
     return text
 
-def build_message(results, trade_date):
+def build_message(results, trade_date, total):
     ds = f"{trade_date[:4]}\\.{trade_date[4:6]}\\.{trade_date[6:]}"
     if not results:
-        return f"📊 *{ds} 스크리닝 결과*\n\n🔍 조건에 맞는 종목이 없습니다\\."
-    lines = [f"📊 *{ds} 스크리닝 결과*", f"✅ *{len(results)}개 종목* 발견\\!\n"]
+        return (
+            f"📊 *{ds} 스크리닝 결과*\n\n"
+            f"🔍 조건에 맞는 종목이 없습니다\\.\n"
+            f"\\(스캔: `{total}`개 종목\\)"
+        )
+    lines = [
+        f"📊 *{ds} 스크리닝 결과*",
+        f"✅ *{len(results)}개 종목* 발견 \\(전체 `{total}`개 스캔\\)\n"
+    ]
     for i, r in enumerate(results, 1):
-        mkt     = "🔵" if r["market"] == "KOSPI" else "🟣"
-        fire    = "🔥🔥" if r["vol_ratio"] >= 1000 else "🔥" if r["vol_ratio"] >= 700 else "📈"
+        mkt  = "🔵" if r["market"] == "KOSPI" else "🟣"
+        fire = "🔥🔥" if r["vol_ratio"] >= 1000 else "🔥" if r["vol_ratio"] >= 700 else "📈"
         lines.append(
             f"{i}\\. {mkt} *{escape_md(r['name'])}* `{escape_md(r['ticker'])}`\n"
             f"   💰 {escape_md(fmt_price(r['close']))}  {fire} "
@@ -287,18 +288,18 @@ async def run_screening(context, chat_id, silent=False):
             text=(
                 "🔍 *스크리닝 시작\\.\\.\\.*\n\n"
                 f"KST: `{escape_md(now_kst.strftime('%Y-%m-%d %H:%M'))}`\n"
-                f"총 `{len(KR_TICKERS)}`종목 Yahoo Finance 분석 중\\.\n"
-                "\\(약 3\\~5분 소요\\)"
+                "전종목 \\(KOSPI\\+KOSDAQ 약 2,500개\\) 분석 중\\.\n"
+                "\\(약 5\\~10분 소요\\)"
             ),
             parse_mode=ParseMode.MARKDOWN_V2,
         )
     try:
-        results, trade_date = await asyncio.get_event_loop().run_in_executor(
+        results, trade_date, total = await asyncio.get_event_loop().run_in_executor(
             None, screen_stocks
         )
         await context.bot.send_message(
             chat_id=chat_id,
-            text=build_message(results, trade_date),
+            text=build_message(results, trade_date, total),
             parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=build_buttons(results),
         )
@@ -316,8 +317,17 @@ async def run_screening(context, chat_id, silent=False):
 # ══════════════════════════════════════════════
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔬 테스트 중\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    lines = ["*Yahoo Finance v8 테스트*\n"]
+    lines = ["*테스트 결과*\n"]
 
+    # 1. GitHub 종목 리스트
+    try:
+        tickers = fetch_all_tickers()
+        src = "GitHub marcap" if len(tickers) > 100 else "내장 폴백"
+        lines.append(f"✅ 종목 리스트: `{len(tickers)}`개 \\({escape_md(src)}\\)")
+    except Exception as e:
+        lines.append(f"❌ 종목 리스트: `{escape_md(str(e)[:60])}`")
+
+    # 2. Yahoo v8 Chart
     for symbol, name in [("005930.KS", "삼성전자"), ("247540.KQ", "에코프로비엠")]:
         try:
             chart = yahoo_chart(symbol, days=10)
@@ -327,14 +337,13 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(
                     f"✅ {escape_md(name)}: "
                     f"`{escape_md(fmt_price(d['close']))}` "
-                    f"거래량비율 `{escape_md('{:.0f}%'.format(vr))}`"
+                    f"거래량비율 `{vr:.0f}%`"
                 )
             else:
                 lines.append(f"⚠️ {escape_md(name)}: 데이터 파싱 실패")
         except Exception as e:
-            lines.append(f"❌ {escape_md(name)}: `{escape_md(str(e)[:80])}`")
+            lines.append(f"❌ {escape_md(name)}: `{escape_md(str(e)[:60])}`")
 
-    lines.append(f"\n총 내장 종목수: `{len(KR_TICKERS)}`개")
     await update.message.reply_text(
         "\n".join(lines), parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -377,7 +386,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🕐 현재: `{escape_md(now.strftime('%Y.%m.%d %H:%M'))}` \\({wd}요일\\)\n"
         f"⏰ 다음 자동 실행: `{escape_md(nr.strftime('%m/%d %H:%M'))}` "
         f"\\({h}시간 {m}분 후\\)\n\n"
-        f"📡 Yahoo Finance v8 \\| 내장 종목 `{len(KR_TICKERS)}`개",
+        f"📡 Yahoo Finance v8 \\| GitHub marcap 전종목",
         parse_mode=ParseMode.MARKDOWN_V2,
     )
 
