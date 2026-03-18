@@ -320,17 +320,25 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔬 API 접근 테스트 중\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
 
     tests = [
-        ("네이버 증권 전종목", "https://m.stock.naver.com/api/stocks/all?market=KOSPI&page=1&pageSize=5"),
-        ("네이버 일봉차트",    "https://api.stock.naver.com/chart/domestic/item/005930/day?count=5"),
-        ("네이버 종목시세",    "https://m.stock.naver.com/api/stock/005930/price"),
+        # 네이버
+        ("네이버 전종목",    "https://m.stock.naver.com/api/stocks/all?market=KOSPI&page=1&pageSize=3&sosok=0"),
+        ("네이버 종목시세",  "https://m.stock.naver.com/api/stock/005930/price"),
+        # Yahoo Finance
+        ("Yahoo 삼성전자",   "https://query1.finance.yahoo.com/v8/finance/chart/005930.KS?interval=1d&range=5d"),
+        ("Yahoo Screener",   "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=day_gainers&count=3"),
+        # GitHub (종목 목록용)
+        ("GitHub KRX list",  "https://raw.githubusercontent.com/FinanceData/krx-tickers/main/KRX_TICKERS.csv"),
     ]
 
     lines = ["*API 접근 테스트 결과*\n"]
     for name, url in tests:
         try:
             r = requests.get(url, headers=HEADERS, timeout=10)
-            data = r.json()
-            lines.append(f"✅ {escape_md(name)}: `{r.status_code}` \\({len(str(data))}bytes\\)")
+            snippet = r.text[:80].replace("\n", " ")
+            lines.append(
+                f"✅ {escape_md(name)}: `{r.status_code}` "
+                f"`{escape_md(snippet)}`"
+            )
         except Exception as e:
             lines.append(f"❌ {escape_md(name)}: `{escape_md(str(e)[:80])}`")
 
