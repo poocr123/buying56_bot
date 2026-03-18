@@ -188,8 +188,10 @@ def parse_chart(chart: dict) -> dict | None:
         if len(closes) < 3 or len(volumes) < 2:
             return None
 
-        today_vol = meta.get("regularMarketVolume") or volumes[-1]
-        prev_vol  = volumes[-2]   # ← 전일 거래량 (차트에서 직접)
+        # 차트는 완료된 거래일만 포함 → volumes[-1] = 어제, volumes[-2] = 그저께
+        # 오늘 실시간 거래량은 meta에만 있음
+        today_vol = meta.get("regularMarketVolume") or 0
+        prev_vol  = volumes[-1]   # ← 전일(어제) 거래량
         price     = meta.get("regularMarketPrice") or closes[-1]
         mkt_cap   = meta.get("marketCap") or 0
 
