@@ -42,46 +42,56 @@ HEADERS = {
 #  컬럼: Date,Code,Name,Market,Shares,MarketCap,...
 # ══════════════════════════════════════════════
 def fetch_all_tickers() -> list[tuple[str, str, str]]:
-    """최근 거래일 CSV에서 전종목 (code, name, market) 반환"""
+    """marcap 연도별 CSV에서 최근 거래일 전종목 반환
+    파일 구조: data/2026.csv (연도별 파일, Date 컬럼으로 날짜 구분)
+    """
     now_kst = datetime.now(KST)
-    tried = []
+    year    = now_kst.strftime("%Y")
+    url     = f"https://raw.githubusercontent.com/FinanceData/marcap/master/data/{year}.csv"
 
-    for i in range(10):
-        d = now_kst - timedelta(days=i)
-        if d.weekday() >= 5:        # 주말 건너뜀
-            continue
-        date_str = d.strftime("%Y-%m-%d")
-        url = (
-            f"https://raw.githubusercontent.com/FinanceData/marcap"
-            f"/master/data/{date_str}.csv"
-        )
-        tried.append(date_str)
-        try:
-            r = requests.get(url, timeout=20)
-            if r.status_code != 200:
-                log.debug(f"marcap {date_str}: HTTP {r.status_code}")
+    try:
+        log.info(f"marcap {year}.csv 다운로드 중...")
+        r = requests.get(url, timeout=60, stream=True)
+        if r.status_code != 200:
+            log.warning(f"marcap {year}.csv: HTTP {r.status_code}")
+            raise ValueError(f"HTTP {r.status_code}")
+
+        # 스트림으로 읽어서 최근 날짜 종목만 추출
+        lines = []
+        for chunk in r.iter_lines(decode_unicode=True):
+            if chunk:
+                lines.append(chunk)
+
+        reader   = csv.DictReader(iter(lines))
+        all_rows = list(reader)
+
+        if not all_rows:
+            raise ValueError("CSV 데이터 없음")
+
+        # 가장 최근 거래일 찾기
+        dates = sorted(set(row.get("Date", "")[:10] for row in all_rows if row.get("Date")), reverse=True)
+        latest_date = dates[0] if dates else ""
+        log.info(f"marcap 최근 거래일: {latest_date} / 전체 행수: {len(all_rows)}")
+
+        tickers = []
+        for row in all_rows:
+            if row.get("Date", "")[:10] != latest_date:
                 continue
+            code   = row.get("Code", "").strip()
+            name   = row.get("Name", "").strip()
+            market = row.get("Market", "KOSPI").strip()
+            if not code or len(code) != 6:
+                continue
+            suffix = ".KS" if market == "KOSPI" else ".KQ"
+            tickers.append((code + suffix, name, market))
 
-            reader = csv.DictReader(io.StringIO(r.text))
-            tickers = []
-            for row in reader:
-                code   = row.get("Code", "").strip()
-                name   = row.get("Name", "").strip()
-                market = row.get("Market", "KOSPI").strip()
-                if not code or len(code) != 6:
-                    continue
-                # Yahoo Finance 심볼 변환
-                suffix = ".KS" if market == "KOSPI" else ".KQ"
-                tickers.append((code + suffix, name, market))
+        if tickers:
+            log.info(f"marcap {latest_date}: {len(tickers)}개 종목 로드 완료")
+            return tickers
 
-            if tickers:
-                log.info(f"marcap {date_str}: {len(tickers)}개 종목 로드")
-                return tickers
+    except Exception as e:
+        log.warning(f"marcap CSV 실패: {e}, 내장 리스트 사용")
 
-        except Exception as e:
-            log.warning(f"marcap {date_str} 실패: {e}")
-
-    log.warning(f"GitHub CSV 실패 (시도: {tried}), 내장 리스트 사용")
     return FALLBACK_TICKERS
 
 
